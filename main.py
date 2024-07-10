@@ -3,8 +3,12 @@ import requests
 import tkinter as tk
 from tkinter import simpledialog, filedialog, ttk, messagebox
 import time
+import logging
 from tqdm import tqdm
-import json
+
+# Настройка логирования
+logging.basicConfig(filename='webhook_sender.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 def choose_file():
@@ -21,6 +25,7 @@ def choose_file():
         title="Выберите файл Excel",
         filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*"))
     )
+    logging.info(f'Выбран файл: {file_path}')
     return file_path
 
 
@@ -35,6 +40,7 @@ def get_webhook_url():
     root = tk.Tk()
     root.withdraw()
     url = simpledialog.askstring("Вебхук URL", "Введите URL для отправки данных через вебхук:")
+    logging.info(f'Введён URL: {url}')
     return url
 
 
@@ -55,11 +61,12 @@ def send_data_via_webhook(url, columns, data, progress_bar, progress_label, prog
         payload = dict(zip(columns, row))
         try:
             response = requests.post(url, json=payload)
+            log_request_response(i + 1, payload, response)
             if response.status_code != 200:
                 raise requests.exceptions.RequestException(f"Response code: {response.status_code}")
             response.raise_for_status()  # Проверяем успешность запроса
         except requests.exceptions.RequestException as e:
-            print(f"Ошибка при отправке данных: {e}, Данные: {payload}")
+            logging.error(f"Ошибка при отправке данных: {e}, Данные: {payload}")
             failed_payloads.append(payload)
         time.sleep(0.1)  # Ожидание 0.1 секунды (10 запросов в секунду)
 
@@ -80,21 +87,27 @@ def send_data_via_webhook(url, columns, data, progress_bar, progress_label, prog
 
 def retry_failed_payloads(url, failed_payloads):
     retries = []
-    for payload in failed_payloads:
+    for i, payload in enumerate(failed_payloads):
         try:
             response = requests.post(url, json=payload)
+            log_request_response(i + 1, payload, response)
             if response.status_code != 200:
                 raise requests.exceptions.RequestException(f"Response code: {response.status_code}")
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            print(f"Повторная ошибка при отправке данных: {e}, Данные: {payload}")
+            logging.error(f"Повторная ошибка при отправке данных: {e}, Данные: {payload}")
             retries.append(payload)
         time.sleep(2)  # Ожидание 2 секунды между повторными попытками
 
     if retries:
-        print("Данные, которые не были успешно отправлены после повторной попытки:")
+        logging.error("Данные, которые не были успешно отправлены после повторной попытки:")
         for payload in retries:
-            print(payload)
+            logging.error(payload)
+
+
+def log_request_response(index, request, response):
+    logging.info(f"Запрос {index}: {request}")
+    logging.info(f"Ответ {index}: {response.status_code} {response.text}")
 
 
 def main():
@@ -122,9 +135,9 @@ def main():
 
             progress_window.mainloop()
         else:
-            print("URL не указан")
+            logging.warning("URL не указан")
     else:
-        print("Файл не выбран")
+        logging.warning("Файл не выбран")
 
 
 if __name__ == "__main__":
