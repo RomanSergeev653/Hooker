@@ -1,0 +1,131 @@
+import pandas as pd
+import requests
+import tkinter as tk
+from tkinter import simpledialog, filedialog, ttk, messagebox
+import time
+from tqdm import tqdm
+import json
+
+
+def choose_file():
+    root = tk.Tk()
+    root.withdraw()  # Скрыть главное окно
+
+    root.option_add('*Font', 'Arial 14')
+    root.option_add('*Background', 'white')
+    root.option_add('*Foreground', 'black')
+    root.option_add('*Button.Background', 'blue')
+    root.option_add('*Button.Foreground', 'white')
+
+    file_path = filedialog.askopenfilename(
+        title="Выберите файл Excel",
+        filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*"))
+    )
+    return file_path
+
+
+def read_excel(file_path):
+    df = pd.read_excel(file_path)
+    data_array = df.values.tolist()
+    columns = df.columns.tolist()
+    return columns, data_array
+
+
+def get_webhook_url():
+    root = tk.Tk()
+    root.withdraw()
+    url = simpledialog.askstring("Вебхук URL", "Введите URL для отправки данных через вебхук:")
+    return url
+
+
+def clean_data(data_array):
+    cleaned_data = []
+    for row in data_array:
+        cleaned_row = [str(value) if pd.notna(value) else None for value in row]  # Преобразование всех данных в строки
+        cleaned_data.append(cleaned_row)
+    return cleaned_data
+
+
+def send_data_via_webhook(url, columns, data, progress_bar, progress_label, progress_window):
+    failed_payloads = []
+    total = len(data)
+    start_time = time.time()
+
+    for i, row in enumerate(tqdm(data, desc="Отправка данных", unit="запрос", mininterval=1)):
+        payload = dict(zip(columns, row))
+        try:
+            response = requests.post(url, json=payload)
+            if response.status_code != 200:
+                raise requests.exceptions.RequestException(f"Response code: {response.status_code}")
+            response.raise_for_status()  # Проверяем успешность запроса
+        except requests.exceptions.RequestException as e:
+            print(f"Ошибка при отправке данных: {e}, Данные: {payload}")
+            failed_payloads.append(payload)
+        time.sleep(0.1)  # Ожидание 0.1 секунды (10 запросов в секунду)
+
+        # Обновляем прогресс-бар
+        progress_bar['value'] = (i + 1) / total * 100
+        progress_label.config(text=f"Прогресс: {i + 1}/{total} записей отправлено")
+        progress_bar.update()
+
+    if failed_payloads:
+        retry_failed_payloads(url, failed_payloads)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    messagebox.showinfo("Информация", f"Отправка данных завершена за {elapsed_time:.2f} секунд.")
+
+    progress_window.destroy()
+
+
+def retry_failed_payloads(url, failed_payloads):
+    retries = []
+    for payload in failed_payloads:
+        try:
+            response = requests.post(url, json=payload)
+            if response.status_code != 200:
+                raise requests.exceptions.RequestException(f"Response code: {response.status_code}")
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"Повторная ошибка при отправке данных: {e}, Данные: {payload}")
+            retries.append(payload)
+        time.sleep(2)  # Ожидание 2 секунды между повторными попытками
+
+    if retries:
+        print("Данные, которые не были успешно отправлены после повторной попытки:")
+        for payload in retries:
+            print(payload)
+
+
+def main():
+    file_path = choose_file()
+    if file_path:
+        columns, data = read_excel(file_path)
+        cleaned_data = clean_data(data)
+        url = get_webhook_url()
+        if url:
+            # Создаем диалоговое окно с прогресс-баром
+            progress_window = tk.Tk()
+            progress_window.title("Отправка данных")
+
+            progress_label = tk.Label(progress_window, text="Прогресс: 0/0 записей отправлено")
+            progress_label.pack(pady=10)
+
+            progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=400, mode="determinate")
+            progress_bar.pack(pady=20)
+
+            progress_window.geometry("500x200")
+
+            # Запускаем отправку данных и обновление прогресс-бара
+            progress_window.after(100, send_data_via_webhook, url, columns, cleaned_data, progress_bar, progress_label,
+                                  progress_window)
+
+            progress_window.mainloop()
+        else:
+            print("URL не указан")
+    else:
+        print("Файл не выбран")
+
+
+if __name__ == "__main__":
+    main()
