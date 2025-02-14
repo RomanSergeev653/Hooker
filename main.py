@@ -47,7 +47,10 @@ def get_webhook_url():
 def clean_data(data_array):
     cleaned_data = []
     for row in data_array:
-        cleaned_row = [str(value) if pd.notna(value) else None for value in row]  # Преобразование всех данных в строки
+        cleaned_row = [
+            str(value)[:-2] if pd.notna(value) and str(value).endswith('.0') else str(value) if pd.notna(value) else ''
+            for value in row
+        ]
         cleaned_data.append(cleaned_row)
     return cleaned_data
 
@@ -58,7 +61,9 @@ def send_data_via_webhook(url, columns, data, progress_bar, progress_label, prog
     start_time = time.time()
 
     for i, row in enumerate(tqdm(data, desc="Отправка данных", unit="запрос", mininterval=1)):
-        payload = dict(zip(columns, row))
+        # Формируем payload, исключая пустые значения
+        payload = {col: row[j] for j, col in enumerate(columns) if row[j] != ''}
+
         try:
             response = requests.post(url, json=payload)
             log_request_response(i + 1, payload, response)
@@ -68,7 +73,7 @@ def send_data_via_webhook(url, columns, data, progress_bar, progress_label, prog
         except requests.exceptions.RequestException as e:
             logging.error(f"Ошибка при отправке данных: {e}, Данные: {payload}")
             failed_payloads.append(payload)
-        time.sleep(0.1)  # Ожидание 0.1 секунды (10 запросов в секунду)
+        time.sleep(0.2)  # Ожидание 0.2 секунды
 
         # Обновляем прогресс-бар
         progress_bar['value'] = (i + 1) / total * 100
