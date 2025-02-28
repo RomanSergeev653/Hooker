@@ -3,13 +3,24 @@ import requests
 import tkinter as tk
 from tkinter import simpledialog, filedialog, ttk, messagebox
 import time
-import logging
-from tqdm import tqdm
+import threading
+import json
+import os
 
-# Настройка логирования
-logging.basicConfig(filename='webhook_sender.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+# Путь к файлу для сохранения последнего выбранного пути
+CONFIG_FILE = "last_path.json"
 
+def load_last_path():
+    """Загружает последний выбранный путь из файла."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as file:
+            return json.load(file).get("last_path", "")
+    return ""
+
+def save_last_path(path):
+    """Сохраняет последний выбранный путь в файл."""
+    with open(CONFIG_FILE, "w") as file:
+        json.dump({"last_path": os.path.dirname(path)}, file)
 
 def choose_file():
     root = tk.Tk()
@@ -21,13 +32,19 @@ def choose_file():
     root.option_add('*Button.Background', 'blue')
     root.option_add('*Button.Foreground', 'white')
 
+    # Загружаем последний выбранный путь
+    initial_dir = load_last_path()
+
     file_path = filedialog.askopenfilename(
         title="Выберите файл Excel",
-        filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*"))
+        filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*")),
+        initialdir=initial_dir  # Указываем последний выбранный путь
     )
-    logging.info(f'Выбран файл: {file_path}')
-    return file_path
 
+    if file_path:
+        save_last_path(file_path)  # Сохраняем новый путь
+
+    return file_path
 
 def read_excel(file_path):
     df = pd.read_excel(file_path)
@@ -35,14 +52,11 @@ def read_excel(file_path):
     columns = df.columns.tolist()
     return columns, data_array
 
-
 def get_webhook_url():
     root = tk.Tk()
     root.withdraw()
     url = simpledialog.askstring("Вебхук URL", "Введите URL для отправки данных через вебхук:")
-    logging.info(f'Введён URL: {url}')
     return url
-
 
 def clean_data(data_array):
     cleaned_data = []
@@ -54,66 +68,57 @@ def clean_data(data_array):
         cleaned_data.append(cleaned_row)
     return cleaned_data
 
-
 def send_data_via_webhook(url, columns, data, progress_bar, progress_label, progress_window):
     failed_payloads = []
     total = len(data)
     start_time = time.time()
 
-    for i, row in enumerate(tqdm(data, desc="Отправка данных", unit="запрос", mininterval=1)):
-        # Формируем payload, исключая пустые значения
+    for i, row in enumerate(data):
         payload = {col: row[j] for j, col in enumerate(columns) if row[j] != ''}
 
         try:
             response = requests.post(url, json=payload)
-            log_request_response(i + 1, payload, response)
             if response.status_code != 200:
                 raise requests.exceptions.RequestException(f"Response code: {response.status_code}")
-            response.raise_for_status()  # Проверяем успешность запроса
+            response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            logging.error(f"Ошибка при отправке данных: {e}, Данные: {payload}")
             failed_payloads.append(payload)
-        time.sleep(0.2)  # Ожидание 0.2 секунды
 
-        # Обновляем прогресс-бар
-        progress_bar['value'] = (i + 1) / total * 100
-        progress_label.config(text=f"Прогресс: {i + 1}/{total} записей отправлено")
-        progress_bar.update()
+        # Обновляем прогресс-бар через метод after
+        progress_window.after(0, update_progress, progress_bar, progress_label, i + 1, total)
 
     if failed_payloads:
         retry_failed_payloads(url, failed_payloads)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
+
+    # Показываем сообщение через метод after
+    progress_window.after(0, show_completion_message, elapsed_time, progress_window)
+
+def update_progress(progress_bar, progress_label, current, total):
+    progress_bar['value'] = current / total * 100
+    progress_label.config(text=f"Прогресс: {current}/{total} записей отправлено")
+
+def show_completion_message(elapsed_time, progress_window):
     messagebox.showinfo("Информация", f"Отправка данных завершена за {elapsed_time:.2f} секунд.")
-
-    progress_window.destroy()
-
+    progress_window.quit()  # Завершаем главный цикл Tkinter
 
 def retry_failed_payloads(url, failed_payloads):
     retries = []
     for i, payload in enumerate(failed_payloads):
         try:
             response = requests.post(url, json=payload)
-            log_request_response(i + 1, payload, response)
             if response.status_code != 200:
                 raise requests.exceptions.RequestException(f"Response code: {response.status_code}")
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            logging.error(f"Повторная ошибка при отправке данных: {e}, Данные: {payload}")
             retries.append(payload)
-        time.sleep(2)  # Ожидание 2 секунды между повторными попытками
 
     if retries:
-        logging.error("Данные, которые не были успешно отправлены после повторной попытки:")
+        print("Данные, которые не были успешно отправлены после повторной попытки:")
         for payload in retries:
-            logging.error(payload)
-
-
-def log_request_response(index, request, response):
-    logging.info(f"Запрос {index}: {request}")
-    logging.info(f"Ответ {index}: {response.status_code} {response.text}")
-
+            print(payload)
 
 def main():
     file_path = choose_file()
@@ -122,7 +127,6 @@ def main():
         cleaned_data = clean_data(data)
         url = get_webhook_url()
         if url:
-            # Создаем диалоговое окно с прогресс-баром
             progress_window = tk.Tk()
             progress_window.title("Отправка данных")
 
@@ -134,16 +138,14 @@ def main():
 
             progress_window.geometry("500x200")
 
-            # Запускаем отправку данных и обновление прогресс-бара
-            progress_window.after(100, send_data_via_webhook, url, columns, cleaned_data, progress_bar, progress_label,
-                                  progress_window)
+            # Запускаем отправку данных в отдельном потоке
+            threading.Thread(target=send_data_via_webhook, args=(url, columns, cleaned_data, progress_bar, progress_label, progress_window), daemon=True).start()
 
             progress_window.mainloop()
         else:
-            logging.warning("URL не указан")
+            print("URL не указан")
     else:
-        logging.warning("Файл не выбран")
-
+        print("Файл не выбран")
 
 if __name__ == "__main__":
     main()
