@@ -1,50 +1,152 @@
 import pandas as pd
 import requests
 import tkinter as tk
-from tkinter import simpledialog, filedialog, ttk, messagebox
+from tkinter import simpledialog, filedialog, ttk, messagebox, Listbox, Button, Frame
 import time
 import threading
 import json
 import os
 
-# Путь к файлу для сохранения последнего выбранного пути
-CONFIG_FILE = "last_path.json"
+# Конфигурация стиля
+CONFIG_FILE = "file_history.json"
+MAX_HISTORY = 5
 
-def load_last_path():
-    """Загружает последний выбранный путь из файла."""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as file:
-            return json.load(file).get("last_path", "")
-    return ""
 
-def save_last_path(path):
-    """Сохраняет последний выбранный путь в файл."""
-    with open(CONFIG_FILE, "w") as file:
-        json.dump({"last_path": os.path.dirname(path)}, file)
-
-def choose_file():
-    root = tk.Tk()
-    root.withdraw()  # Скрыть главное окно
-
+def apply_style(root):
+    """Применяет единый стиль ко всем элементам интерфейса"""
     root.option_add('*Font', 'Arial 14')
     root.option_add('*Background', 'white')
     root.option_add('*Foreground', 'black')
     root.option_add('*Button.Background', 'blue')
     root.option_add('*Button.Foreground', 'white')
+    root.option_add('*Listbox.Background', 'white')
+    root.option_add('*Listbox.Foreground', 'black')
+    root.option_add('*Listbox.selectBackground', 'navy')
+    root.option_add('*Label.Background', 'white')
 
-    # Загружаем последний выбранный путь
-    initial_dir = load_last_path()
 
-    file_path = filedialog.askopenfilename(
-        title="Выберите файл Excel",
-        filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*")),
-        initialdir=initial_dir  # Указываем последний выбранный путь
-    )
+def load_file_history():
+    """Загружает историю файлов с сохранением стиля"""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("history", [])
+    return []
 
-    if file_path:
-        save_last_path(file_path)  # Сохраняем новый путь
 
-    return file_path
+def save_file_history(file_path):
+    """Сохраняет историю с проверкой стиля"""
+    if not file_path or not os.path.exists(file_path):
+        return
+
+    history = load_file_history()
+    if file_path in history:
+        history.remove(file_path)
+    history.insert(0, file_path)
+    history = history[:MAX_HISTORY]
+
+    with open(CONFIG_FILE, "w") as f:
+        json.dump({
+            "history": history,
+            "last_path": os.path.dirname(file_path)
+        }, f)
+
+
+def create_history_window():
+    """Создаёт окно истории с сохранением стиля"""
+    root = tk.Tk()
+    apply_style(root)
+    root.title("Выберите файл - История")
+    root.geometry("700x400")
+
+    # Основной фрейм
+    main_frame = Frame(root, bg='white')
+    main_frame.pack(pady=20, padx=20, fill='both', expand=True)
+
+    # Заголовок
+    label = tk.Label(main_frame,
+                     text="Последние открытые файлы:",
+                     bg='white')
+    label.pack(anchor='w', pady=(0, 10))
+
+    # Список файлов с полосой прокрутки
+    scrollbar = tk.Scrollbar(main_frame)
+    listbox = Listbox(main_frame,
+                      yscrollcommand=scrollbar.set,
+                      height=8,
+                      selectbackground='navy',
+                      selectforeground='white')
+    scrollbar.config(command=listbox.yview)
+
+    listbox.pack(side='left', fill='both', expand=True)
+    scrollbar.pack(side='right', fill='y')
+
+    # Заполнение списка
+    history = load_file_history()
+    for i, file_path in enumerate(history, 1):
+        listbox.insert(tk.END, f"{i}. {os.path.basename(file_path)}\n{file_path}")
+
+    # Фрейм для кнопок
+    button_frame = Frame(main_frame, bg='white')
+    button_frame.pack(fill='x', pady=(15, 0))
+
+    # Кнопки с сохранением стиля
+    def on_select():
+        if listbox.curselection():
+            selected_file = history[listbox.curselection()[0]]
+            root.selected_file = selected_file
+            root.quit()
+
+    select_btn = Button(button_frame,
+                        text="Выбрать",
+                        command=on_select)
+    select_btn.pack(side='left', padx=5)
+
+    def browse_files():
+        initial_dir = os.path.dirname(history[0]) if history else ""
+        file_path = filedialog.askopenfilename(
+            initialdir=initial_dir,
+            filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*")),
+            title="Выберите файл Excel"
+        )
+        if file_path:
+            save_file_history(file_path)
+            root.selected_file = file_path
+            root.quit()
+
+    browse_btn = Button(button_frame,
+                        text="Обзор...",
+                        command=browse_files)
+    browse_btn.pack(side='left', padx=5)
+
+    cancel_btn = Button(button_frame,
+                        text="Отмена",
+                        command=root.quit)
+    cancel_btn.pack(side='right', padx=5)
+
+    root.mainloop()
+    root.destroy()
+    return getattr(root, 'selected_file', None)
+
+
+def choose_file():
+    """Функция выбора файла с сохранением стиля"""
+    history = load_file_history()
+
+    if not history:
+        root = tk.Tk()
+        apply_style(root)
+        root.withdraw()
+
+        file_path = filedialog.askopenfilename(
+            filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*")),
+            title="Выберите файл Excel"
+        )
+        if file_path:
+            save_file_history(file_path)
+        return file_path
+    else:
+        return create_history_window()
 
 def read_excel(file_path):
     df = pd.read_excel(file_path)

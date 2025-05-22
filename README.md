@@ -11,7 +11,7 @@ pip install pandas requests openpyxl
 ```
 
 ## Использование
-- Запустите скрипт main.py.
+- Запустите файл main в папке dist
 
 - Выберите файл Excel, из которого нужно загрузить данные.
 
